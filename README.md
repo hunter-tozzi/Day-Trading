@@ -25,7 +25,7 @@ The usual reasons are: trading all day in chop, no market filter, stops that are
 ## Setup
 
 ```bash
-cd alpaca-daytrader
+cd Day-Trading
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env        # then paste your PAPER API key + secret into .env
