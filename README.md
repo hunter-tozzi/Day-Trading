@@ -1,10 +1,69 @@
-# Alpaca Day Trader: Opening Range Breakout
+# Alpaca Day Trader
 
-A rules-based intraday bot for [Alpaca](https://alpaca.markets). It scans for active stocks, trades breakouts of the first 15 minutes' range, and manages risk strictly. It also includes a **backtester that runs the exact same code**, so you can check whether the rules would have made money before you trust them with anything.
+Two rules-based intraday strategies for [Alpaca](https://alpaca.markets), each with a **backtester that runs the exact same code** as the live bot, so you can check whether the rules would have made money before you trust them with anything.
 
-> **Please read this first.** No strategy is guaranteed to make money, this one included. Most retail day traders lose money. This bot is built to **lose small and survive** (fixed risk per trade, a daily loss limit, stops held at the broker, everything closed before the bell). Whether it has an edge in the current market is something **you** have to verify: backtest it, then paper trade it for several weeks. Keep `ALPACA_PAPER=true` until both look good.
+| Strategy | Trades | Start with |
+|---|---|---|
+| **[SPY intraday momentum](#strategy-1-spy-intraday-momentum-recommended)** (recommended) | SPY only, 0–2 trades/day, long and short | `python -m daytrader.momentum_backtest` |
+| [Opening range breakout](#strategy-2-opening-range-breakout) | top 10 "stocks in play", long | `python -m daytrader.backtest` |
 
-## How it works
+> **Please read this first.** No strategy is guaranteed to make money, these included. Most retail day traders lose money. Both bots are built to **lose small and survive** (stops held at the broker, volatility-based sizing, a daily loss limit, everything closed before the bell). Whether a strategy has an edge in the current market is something **you** have to verify: backtest it over several years, then paper trade it for several weeks. Keep `ALPACA_PAPER=true` until both look good.
+
+## Setup
+
+```bash
+cd Day-Trading
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env        # then paste your PAPER API key + secret into .env
+```
+
+Get paper keys at app.alpaca.markets → switch to **Paper Trading** → *API Keys*.
+
+## Strategy 1: SPY intraday momentum (recommended)
+
+Based on a published, long-history study: Zarattini, Aziz & Barbon (2024), *"Beat the Market: An Effective Intraday Momentum Strategy for S&P500 ETF (SPY)"*. The authors report roughly 19–20% a year after costs from 2007 to early 2024 (Sharpe ~1.3) with up to 4x leverage. Treat that as a claim to verify, not a promise: it was measured on the past, and edges often shrink once they are published.
+
+**The idea.** Most of the day, SPY wanders inside a band around its open: noise. How wide that band normally is at 10:00, 10:30, and so on can be measured from the last 14 sessions. When SPY leaves the band, buyers or sellers are in control, and intraday moves like that tend to run into the close. So the bot follows the move and exits quickly if it fails.
+
+| Step | Rule |
+|---|---|
+| Noise band | For each minute of the day: the average \|move from the open\| over the last 14 sessions. Upper band = max(open, yesterday's close) × (1 + that), lower band = min(open, yesterday's close) × (1 − that). |
+| Decide | Only at 10:00, 10:30, … 15:30 ET. **Long** if SPY is above the upper band (and VWAP); **short** if below the lower band (and VWAP). |
+| Stop | Long: max(upper band, VWAP). Short: min(lower band, VWAP). Moved every 30 min and **held at Alpaca** in between, so it works even if the bot dies. |
+| Size | Aims for ~2% daily volatility of equity: equity × min(2, 2% ÷ SPY's recent daily volatility). Calm market → bigger position, wild market → smaller. |
+| Exit | 15:55 ET, everything closed. At most 4 trades a day; trading stops for the day at −3%. |
+
+**What to expect.** Most trades are small losers (expect a win rate well under 50%); the profit comes from a handful of big trend days, often in volatile markets. Choppy, calm months are usually flat to slightly negative. That is the shape of the strategy, not a malfunction, but it means you need months, not days, to judge it.
+
+**Why it's a better fit than a typical AI trading bot:**
+- One of the most liquid instruments in the world: a $0.01 spread, reliable fills, no scanner, no penny stocks, no borrow problems on shorts.
+- Very few parameters (14-day lookback, 30-min checks), so there's little to overfit.
+- Makes money when the market *trends* in either direction, including selloffs.
+- Few trades: costs stay small.
+
+### Run it
+
+```bash
+python -m daytrader.momentum_backtest --years 5          # SIP minute data from Alpaca (free plan OK)
+python -m daytrader.momentum_backtest --years 9          # data goes back to 2016: use it
+python -m daytrader.momentum_backtest --long-only        # if your account can't short
+python -m daytrader.momentum_backtest --symbol QQQ       # same rules on the Nasdaq-100
+python -m daytrader.momentum_bot                         # paper trading; start before 10:00 ET
+```
+
+The backtest prints total return, CAGR, Sharpe, max drawdown and a **year-by-year table against buy & hold**. Before paper trading, look for: profit factor > 1.1, Sharpe > 0.8, and **most years positive**, not one lucky year carrying the rest. Logs from the bot go to `logs/momentum.log`.
+
+**Account requirements:** at least **$25,000** equity. The strategy trades most days, and the Pattern Day Trader rule caps accounts under $25k at 3 day trades per 5 business days (the bot detects this and stops entering). Shorting needs a margin account; otherwise use `--long-only`.
+
+**Honest limitations:**
+- The backtest fills at the next minute's open plus $0.01/share and fills stops at the worse of the stop and the bar's open. Real fills are usually close for SPY, but not identical.
+- The paper checked stops only every 30 minutes; this bot keeps a live stop at Alpaca (safer, slightly more whipsaw). The backtest models what the bot actually does.
+- On a pure random walk the backtest breaks even before costs and loses a little after (see `tests/test_momentum.py`). That's the check that the backtester isn't peeking at future prices.
+
+## Strategy 2: Opening range breakout
+
+### How it works
 
 | Step | Time (ET) | What happens |
 |---|---|---|
@@ -19,21 +78,10 @@ A rules-based intraday bot for [Alpaca](https://alpaca.markets). It scans for ac
 
 All of these numbers are in [`daytrader/config.py`](daytrader/config.py).
 
-### Why bots like your Grok one tend to bleed money
+#### Why bots like your Grok one tend to bleed money
 The usual reasons are: trading all day in chop, no market filter, stops that are too tight or missing, sizing that ignores volatility, chasing moves that already happened, too many trades (spread and slippage add up), and never testing on historical data. Each rule above addresses one of these.
 
-## Setup
-
-```bash
-cd Day-Trading
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env        # then paste your PAPER API key + secret into .env
-```
-
-Get paper keys at app.alpaca.markets → switch to **Paper Trading** → *API Keys*.
-
-## 1. Backtest first
+### 1. Backtest first
 
 ```bash
 python -m daytrader.backtest --days 90                 # uses your feed (iex by default)
@@ -61,7 +109,7 @@ Honest limitations of the backtest:
 - If a bar touches both the stop and the target, the backtest assumes the stop was hit. That is deliberately pessimistic.
 - A sanity check was run on pure random-walk prices. The strategy lost slightly there (about the cost of trading), which is what an honest backtester should show. If you edit the code and random data starts showing profits, you've introduced look-ahead bias.
 
-## 2. Paper trade
+### 2. Paper trade
 
 ```bash
 python -m daytrader.bot            # runs every day; sleeps while the market is closed
@@ -70,7 +118,7 @@ python -m daytrader.bot --once     # one session, then exit
 
 Start it before 9:45 ET and leave it running. Logs go to `logs/bot.log`. Paper trade for **at least 4–6 weeks** (roughly 50+ trades) and compare the results with the backtest. Paper fills are optimistic, so expect real trading to be somewhat worse.
 
-## Tuning (in `config.py`)
+### Tuning (in `config.py`)
 Change **one thing at a time**, then re-run the backtest over several periods. Tuning until one backtest looks great is how you overfit.
 - `min_rvol` higher → fewer, more selective trades.
 - `entry_cutoff` earlier (e.g. 10:30) → only the strongest part of the morning.
@@ -81,12 +129,15 @@ Change **one thing at a time**, then re-run the backtest over several periods. T
 ## Project layout
 ```
 daytrader/
-  config.py      all settings
-  strategy.py    scanner scoring, entry rules, position sizing (pure logic, shared)
-  indicators.py  VWAP, ATR
-  broker.py      Alpaca data + bracket orders
-  bot.py         live/paper loop
-  backtest.py    historical simulation + report
+  config.py             all settings (Config = ORB, MomentumConfig = SPY momentum)
+  momentum.py           SPY momentum rules: noise band, decisions, sizing (pure logic, shared)
+  momentum_bot.py       SPY momentum live/paper loop
+  momentum_backtest.py  SPY momentum historical simulation + report
+  strategy.py           ORB scanner scoring, entry rules, position sizing (pure logic, shared)
+  bot.py                ORB live/paper loop
+  backtest.py           ORB historical simulation + report
+  indicators.py         VWAP, ATR
+  broker.py             Alpaca data + orders
 tests/           unit tests (pytest), no API keys needed
 ```
 

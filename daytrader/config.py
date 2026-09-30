@@ -49,3 +49,26 @@ class Config:
         "SOFI", "MARA", "RIVN", "HOOD", "ARM", "DELL", "ORCL", "CRM", "ADBE", "QCOM",
     ])
     market_symbol: str = "SPY"
+
+
+@dataclass
+class MomentumConfig:
+    """SPY intraday momentum ("noise area" breakout). See daytrader/momentum.py."""
+    symbol: str = "SPY"
+    lookback_days: int = 14            # past sessions used for the noise area and volatility
+    band_mult: float = 1.0             # boundary = open +/- band_mult x avg move from open
+    check_every_min: int = 30          # only decide at :00 and :30 (less noise, fewer trades)
+    first_check_min: int = 30          # first decision at 10:00 ET
+    last_entry_min: int = 360          # no new entries after 15:30 ET
+    flatten_time: time = time(15, 55)  # close everything before the bell (ET)
+    allow_shorts: bool = True          # the edge is symmetric; needs a margin account
+    max_trades_per_day: int = 4        # caps whipsaw on choppy days
+
+    # ---- Sizing: aim for a fixed daily volatility instead of a fixed share count ----
+    target_daily_vol_pct: float = 2.0  # position = equity x min(max_leverage, 2% / SPY daily vol)
+    max_leverage: float = 2.0          # the paper allowed 4x; 2x keeps drawdowns survivable
+    daily_loss_limit_pct: float = 3.0  # stop trading for the day after -3%
+
+    # ---- Backtest cost assumptions (SPY spread is usually $0.01) ----
+    slippage_per_share: float = 0.01   # per side
+    commission_per_share: float = 0.0
